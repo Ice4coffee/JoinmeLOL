@@ -5,6 +5,7 @@ const { Telegraf } = require("telegraf");
 /* ================= ENV ================= */
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
+
 const PORT = process.env.PORT || 3000;
 
 const MC_HOST = process.env.MC_HOST;
@@ -25,23 +26,17 @@ const bot = new Telegraf(BOT_TOKEN);
 const app = express();
 app.use(express.json());
 
-app.get("/", (req, res) => {
-  res.send("MC-TG bot running");
-});
+app.get("/", (_, res) => res.send("OK"));
 
 app.use(bot.webhookCallback(`/bot${BOT_TOKEN}`));
 
 app.listen(PORT, async () => {
   log("Server started on " + PORT);
 
-  const baseUrl = process.env.WEBHOOK_URL;
+  const base = process.env.WEBHOOK_URL;
+  if (!base) return log("WEBHOOK_URL missing");
 
-  if (!baseUrl) {
-    log("WEBHOOK_URL missing");
-    return;
-  }
-
-  const url = `${baseUrl}/bot${BOT_TOKEN}`;
+  const url = `${base}/bot${BOT_TOKEN}`;
 
   try {
     await bot.telegram.deleteWebhook({ drop_pending_updates: true });
@@ -57,17 +52,16 @@ app.listen(PORT, async () => {
 /* ================= LOG ================= */
 function log(msg) {
   console.log("[LOG]", msg);
-
-  if (CHAT_ID) {
-    bot.telegram.sendMessage(CHAT_ID, "🪵 " + msg).catch(() => {});
-  }
+  if (CHAT_ID) bot.telegram.sendMessage(CHAT_ID, "🪵 " + msg).catch(() => {});
 }
 
-/* ================= MC ================= */
+/* ================= MC STATE ================= */
 let mc = null;
 let reconnects = 0;
 let lastCode = "hub";
+let crashLock = false;
 
+/* ================= START MC ================= */
 function startMC(code = "hub") {
   lastCode = code;
 
@@ -83,9 +77,10 @@ function startMC(code = "hub") {
     port: MC_PORT,
     username: MC_USER,
     version: MC_VERSION,
+    viewDistance: 2, // IMPORTANT
   });
 
-  /* LOGIN */
+  /* ================= LOGIN ================= */
   mc.on("login", () => {
     log("MC login");
 
@@ -96,7 +91,7 @@ function startMC(code = "hub") {
     }
   });
 
-  /* SPAWN FLOW */
+  /* ================= SPAWN FLOW ================= */
   mc.on("spawn", () => {
     log("MC spawn");
 
@@ -110,39 +105,38 @@ function startMC(code = "hub") {
     }, 3000);
   });
 
-  /* ================= ANTI CRASH CHUNK FIX ================= */
-  let chunkCount = 0;
-  let start = Date.now();
-
-  function spike() {
-    if (Date.now() - start > 5000) {
-      chunkCount = 0;
-      start = Date.now();
-    }
-
-    chunkCount++;
-
-    if (chunkCount > 200) {
-      log("⚡ ANTI-LAG ACTIVE");
-      return true;
-    }
-
-    return false;
-  }
+  /* ================= CRITICAL FIX: DISABLE CHUNK CRASH ================= */
 
   mc._client.on("map_chunk", () => {
-    if (spike()) return;
+    // полностью игнорируем chunk parsing
+    return;
   });
 
   mc._client.on("map_chunk_bulk", () => {
-    if (spike()) return;
+    return;
   });
 
-  /* ================= RECONNECT ================= */
+  /* ================= ANTI CRASH LOCK ================= */
   function reconnect(reason) {
+    if (crashLock) return;
+
+    // 💀 hard crash protection
+    if (String(reason).includes("sourceStart")) {
+      crashLock = true;
+
+      log("💀 HARD CHUNK CRASH → cooldown 60s");
+
+      setTimeout(() => {
+        crashLock = false;
+        startMC(lastCode);
+      }, 60000);
+
+      return;
+    }
+
     reconnects++;
 
-    const delay = Math.min(30000, reconnects * 2000);
+    const delay = Math.min(30000, reconnects * 3000);
 
     log(`🔁 reconnect (${reason}) in ${delay}ms`);
 
@@ -152,11 +146,11 @@ function startMC(code = "hub") {
   }
 
   mc.on("end", () => reconnect("end"));
-  mc.on("kicked", () => reconnect("kicked"));
+  mc.on("kicked", (r) => reconnect("kicked"));
   mc.on("error", (e) => reconnect(e.message));
 }
 
-/* ================= COMMAND ================= */
+/* ================= TELEGRAM COMMAND ================= */
 bot.command("go", (ctx) => {
   const code = ctx.message.text.split(" ")[1] || "hub";
 
