@@ -8,7 +8,7 @@ const MC_PASSWORD = process.env.MC_PASSWORD;
 const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN;
 const PORT = process.env.PORT || 3000;
 
-if (!BOT_TOKEN) throw new Error("BOT_TOKEN is required");
+if (!BOT_TOKEN) throw new Error("BOT_TOKEN required");
 
 /* ================= LOG ================= */
 function log(msg) {
@@ -29,16 +29,41 @@ function normalizeDomain(domain) {
   return d;
 }
 
-/* ================= TELEGRAM ================= */
+/* ================= BOT ================= */
 const bot = new Telegraf(BOT_TOKEN);
-
-const webhookPath = `/bot${BOT_TOKEN}`;
+const path = `/bot${BOT_TOKEN}`;
 
 /* ================= MC ================= */
 let mc = null;
 let running = false;
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function disableChunks(bot) {
+  try {
+    const c = bot._client;
+    if (!c) return;
+
+    const packets = [
+      "map_chunk",
+      "map_chunk_bulk",
+      "unload_chunk",
+      "multi_block_change",
+      "block_change",
+      "update_block_entity",
+      "block_action",
+    ];
+
+    for (const p of packets) {
+      c.removeAllListeners(p);
+      c.on(p, () => {});
+    }
+
+    log("Chunk protection enabled");
+  } catch (e) {
+    log("Chunk fix error: " + e.message);
+  }
+}
 
 async function startMC(code) {
   if (running) return;
@@ -58,7 +83,10 @@ async function startMC(code) {
       version: "1.8.9",
     });
 
-    mc.once("login", () => log("MC login"));
+    mc.once("login", () => {
+      log("MC login");
+      disableChunks(mc);
+    });
 
     mc.once("spawn", async () => {
       log("MC spawn");
@@ -78,13 +106,14 @@ async function startMC(code) {
         mc.quit();
 
       } catch (e) {
-        log("MC error: " + e.message);
+        log("MC spawn error: " + e.message);
       }
 
       running = false;
     });
 
     mc.on("error", (e) => log("MC error: " + e.message));
+
     mc.on("end", () => {
       log("MC disconnected");
       running = false;
@@ -96,7 +125,7 @@ async function startMC(code) {
   }
 }
 
-/* ================= TG COMMAND ================= */
+/* ================= TG ================= */
 bot.start((ctx) => ctx.reply("Bot ready. Use /go <code>"));
 
 bot.command("go", async (ctx) => {
@@ -107,19 +136,18 @@ bot.command("go", async (ctx) => {
   startMC(code);
 });
 
-/* ================= WEBHOOK SETUP ================= */
+/* ================= WEBHOOK ================= */
 async function setupWebhook() {
   try {
     const base = normalizeDomain(WEBHOOK_DOMAIN);
 
     if (!base) {
-      throw new Error("WEBHOOK_DOMAIN is missing");
+      throw new Error("WEBHOOK_DOMAIN missing");
     }
 
-    const url = `${base}${webhookPath}`;
+    const url = `${base}${path}`;
 
     await bot.telegram.deleteWebhook();
-
     await bot.telegram.setWebhook(url);
 
     log("Webhook set → " + url);
@@ -131,7 +159,7 @@ async function setupWebhook() {
 
 /* ================= HTTP SERVER ================= */
 const server = http.createServer((req, res) => {
-  if (req.method === "POST" && req.url === webhookPath) {
+  if (req.method === "POST" && req.url === path) {
     let body = "";
 
     req.on("data", chunk => (body += chunk));
@@ -146,6 +174,7 @@ const server = http.createServer((req, res) => {
 
     res.writeHead(200);
     res.end("OK");
+
   } else {
     res.writeHead(200);
     res.end("Bot running");
@@ -154,7 +183,6 @@ const server = http.createServer((req, res) => {
 
 /* ================= START ================= */
 server.listen(PORT, async () => {
-  log("Server started on port " + PORT);
-
+  log("Server started on " + PORT);
   await setupWebhook();
 });
