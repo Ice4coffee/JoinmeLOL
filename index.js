@@ -1,188 +1,177 @@
-const { Telegraf } = require("telegraf");
-const mineflayer = require("mineflayer");
-const http = require("http");
+import express from "express";
+import mineflayer from "mineflayer";
+import { Telegraf } from "telegraf";
 
 /* ================= ENV ================= */
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const MC_PASSWORD = process.env.MC_PASSWORD;
-const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN;
+const CHAT_ID = process.env.CHAT_ID;
 const PORT = process.env.PORT || 3000;
 
-if (!BOT_TOKEN) throw new Error("BOT_TOKEN required");
+const MC_HOST = process.env.MC_HOST;
+const MC_PORT = Number(process.env.MC_PORT || 25565);
+const MC_USER = process.env.MC_USER || "Bot";
+const MC_PASSWORD = process.env.MC_PASSWORD || "";
+const MC_VERSION = process.env.MC_VERSION || "1.8.9";
+
+/* ================= SAFETY CHECK ================= */
+if (!BOT_TOKEN || !MC_HOST) {
+  throw new Error("Missing BOT_TOKEN or MC_HOST");
+}
+
+/* ================= TELEGRAM (WEBHOOK SAFE) ================= */
+const bot = new Telegraf(BOT_TOKEN);
+
+/* ================= EXPRESS (WEBHOOK SERVER) ================= */
+const app = express();
+app.use(express.json());
+
+app.get("/", (_, res) => {
+  res.send("MC-TG bot running");
+});
+
+/* Telegram webhook endpoint */
+app.use(bot.webhookCallback(`/bot${BOT_TOKEN}`));
+
+app.listen(PORT, async () => {
+  log(`Server started on ${PORT}`);
+
+  const url = process.env.WEBHOOK_URL; 
+  if (!url) {
+    log("❌ WEBHOOK_URL missing (auto fix mode)");
+    return;
+  }
+
+  const fixedUrl = url.endsWith("/")
+    ? url.slice(0, -1)
+    : url;
+
+  const full = `${fixedUrl}/bot${BOT_TOKEN}`;
+
+  try {
+    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+    await bot.telegram.setWebhook(full);
+    log(`Webhook set → ${full}`);
+  } catch (e) {
+    log("Webhook error: " + e.message);
+  }
+
+  startMC();
+});
 
 /* ================= LOG ================= */
 function log(msg) {
   console.log(`[LOG ${new Date().toISOString()}] ${msg}`);
+  if (CHAT_ID) bot.telegram.sendMessage(CHAT_ID, `🪵 ${msg}`).catch(() => {});
 }
 
-/* ================= WEBHOOK FIX ================= */
-function normalizeDomain(domain) {
-  if (!domain) return null;
-
-  let d = String(domain).trim();
-  d = d.replace(/\/+$/, "");
-
-  if (!d.startsWith("http://") && !d.startsWith("https://")) {
-    d = "https://" + d;
-  }
-
-  return d;
-}
-
-/* ================= BOT ================= */
-const bot = new Telegraf(BOT_TOKEN);
-const path = `/bot${BOT_TOKEN}`;
-
-/* ================= MC ================= */
+/* ================= MC STATE ================= */
 let mc = null;
-let running = false;
+let reconnectAttempts = 0;
+let reconnectTimer = null;
+let lastCode = "hub";
+let antiLag = false;
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+/* ================= MC START ================= */
+function startMC(code = "hub") {
+  lastCode = code;
 
-function disableChunks(bot) {
-  try {
-    const c = bot._client;
-    if (!c) return;
+  if (mc) {
+    try { mc.quit(); } catch {}
+    mc = null;
+  }
 
-    const packets = [
-      "map_chunk",
-      "map_chunk_bulk",
-      "unload_chunk",
-      "multi_block_change",
-      "block_change",
-      "update_block_entity",
-      "block_action",
-    ];
+  log(`MC connect → ${MC_HOST}:${MC_PORT}`);
 
-    for (const p of packets) {
-      c.removeAllListeners(p);
-      c.on(p, () => {});
+  mc = mineflayer.createBot({
+    host: MC_HOST,
+    port: MC_PORT,
+    username: MC_USER,
+    version: MC_VERSION,
+  });
+
+  /* ================= LOGIN FLOW ================= */
+  mc.on("login", () => {
+    log("MC login");
+
+    setTimeout(() => {
+      if (MC_PASSWORD) mc.chat(`/login ${MC_PASSWORD}`);
+    }, 1500);
+  });
+
+  mc.on("spawn", () => {
+    log("MC spawn");
+
+    setTimeout(() => {
+      mc.chat(`/play ${lastCode}`);
+
+      setTimeout(() => {
+        mc.chat(`/joinme`);
+      }, 3000);
+
+    }, 3000);
+  });
+
+  /* ================= ANTI-LAG ================= */
+  let chunkCount = 0;
+  let chunkReset = Date.now();
+
+  function chunkSpike() {
+    const now = Date.now();
+
+    if (now - chunkReset > 5000) {
+      chunkCount = 0;
+      chunkReset = now;
     }
 
-    log("Chunk protection enabled");
-  } catch (e) {
-    log("Chunk fix error: " + e.message);
-  }
-}
+    chunkCount++;
 
-async function startMC(code) {
-  if (running) return;
-  running = true;
+    if (chunkCount > 200 && !antiLag) {
+      antiLag = true;
+      log("⚡ ANTI-LAG ON");
 
-  try {
-    if (mc) {
-      try { mc.quit(); } catch {}
-      mc = null;
+      setTimeout(() => {
+        antiLag = false;
+        log("⚡ ANTI-LAG OFF");
+      }, 5000);
     }
-
-    mc = mineflayer.createBot({
-      host: "agerapvp.club",
-      port: 25565,
-      username: "Parabala_",
-      auth: "offline",
-      version: "1.8.9",
-    });
-
-    mc.once("login", () => {
-      log("MC login");
-      disableChunks(mc);
-    });
-
-    mc.once("spawn", async () => {
-      log("MC spawn");
-
-      try {
-        await sleep(1200);
-
-        if (MC_PASSWORD) mc.chat(`/login ${MC_PASSWORD}`);
-        await sleep(2500);
-
-        mc.chat(`/play ${code}`);
-        await sleep(4000);
-
-        mc.chat("/joinme");
-
-        await sleep(3000);
-        mc.quit();
-
-      } catch (e) {
-        log("MC spawn error: " + e.message);
-      }
-
-      running = false;
-    });
-
-    mc.on("error", (e) => log("MC error: " + e.message));
-
-    mc.on("end", () => {
-      log("MC disconnected");
-      running = false;
-    });
-
-  } catch (e) {
-    log("MC crash: " + e.message);
-    running = false;
   }
+
+  mc._client.on("map_chunk", () => {
+    chunkSpike();
+    if (antiLag) return;
+  });
+
+  mc._client.on("map_chunk_bulk", () => {
+    chunkSpike();
+    if (antiLag) return;
+  });
+
+  /* ================= DISCONNECT HANDLERS ================= */
+  function reconnect(reason) {
+    reconnectAttempts++;
+
+    const delay = Math.min(30000, 2000 * reconnectAttempts);
+
+    log(`🔁 Reconnect (${reason}) in ${delay}ms`);
+
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+
+    reconnectTimer = setTimeout(() => {
+      startMC(lastCode);
+    }, delay);
+  }
+
+  mc.on("end", () => reconnect("end"));
+  mc.on("kicked", (r) => reconnect("kicked"));
+  mc.on("error", (e) => reconnect(e.message));
 }
 
-/* ================= TG ================= */
-bot.start((ctx) => ctx.reply("Bot ready. Use /go <code>"));
-
+/* ================= TELEGRAM COMMAND ================= */
 bot.command("go", async (ctx) => {
-  const code = ctx.message.text.split(" ")[1];
-  if (!code) return ctx.reply("Usage: /go <code>");
+  const code = ctx.message.text.split(" ")[1] || "hub";
 
-  ctx.reply(`Starting: ${code}`);
+  log(`/go → ${code}`);
   startMC(code);
-});
 
-/* ================= WEBHOOK ================= */
-async function setupWebhook() {
-  try {
-    const base = normalizeDomain(WEBHOOK_DOMAIN);
-
-    if (!base) {
-      throw new Error("WEBHOOK_DOMAIN missing");
-    }
-
-    const url = `${base}${path}`;
-
-    await bot.telegram.deleteWebhook();
-    await bot.telegram.setWebhook(url);
-
-    log("Webhook set → " + url);
-
-  } catch (e) {
-    log("Webhook error: " + e.message);
-  }
-}
-
-/* ================= HTTP SERVER ================= */
-const server = http.createServer((req, res) => {
-  if (req.method === "POST" && req.url === path) {
-    let body = "";
-
-    req.on("data", chunk => (body += chunk));
-
-    req.on("end", () => {
-      try {
-        bot.handleUpdate(JSON.parse(body));
-      } catch (e) {
-        log("Update error: " + e.message);
-      }
-    });
-
-    res.writeHead(200);
-    res.end("OK");
-
-  } else {
-    res.writeHead(200);
-    res.end("Bot running");
-  }
-});
-
-/* ================= START ================= */
-server.listen(PORT, async () => {
-  log("Server started on " + PORT);
-  await setupWebhook();
+  ctx.reply(`Connecting to ${code}`);
 });
