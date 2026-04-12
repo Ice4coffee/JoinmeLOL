@@ -1,69 +1,71 @@
 const { Telegraf } = require("telegraf");
 const mineflayer = require("mineflayer");
-const express = require("express");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN; 
-// пример: https://your-app.up.railway.app
-
+const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN;
+const MC_PASSWORD = process.env.MC_PASSWORD;
 const PORT = process.env.PORT || 3000;
 
+if (!BOT_TOKEN) throw new Error("BOT_TOKEN is required");
+if (!WEBHOOK_DOMAIN) throw new Error("WEBHOOK_DOMAIN is required");
+
 const bot = new Telegraf(BOT_TOKEN);
-const app = express();
-
-app.use(express.json());
-
-/* ===================== MC ===================== */
-let mcBot = null;
-let running = false;
-
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 function log(msg) {
   console.log(`[LOG ${new Date().toISOString()}] ${msg}`);
 }
 
-/* ===================== MC START ===================== */
+/* ===================== MC ===================== */
+let mc = null;
+let running = false;
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 async function startMC(code) {
   if (running) return;
   running = true;
 
   try {
-    if (mcBot) {
-      try { mcBot.quit(); } catch {}
-      mcBot = null;
+    if (mc) {
+      try { mc.quit(); } catch {}
+      mc = null;
     }
 
-    mcBot = mineflayer.createBot({
+    mc = mineflayer.createBot({
       host: "agerapvp.club",
       port: 25565,
       username: "Parabala_",
       auth: "offline",
-      viewDistance: 2,
+      version: "1.8.9",
     });
 
-    mcBot.once("login", () => log("MC login"));
-    mcBot.once("spawn", async () => {
+    mc.once("login", () => log("MC login"));
+
+    mc.once("spawn", async () => {
       log("MC spawn");
 
-      await sleep(1200);
+      try {
+        await sleep(1200);
 
-      mcBot.chat(`/login ${process.env.MC_PASSWORD}`);
-      await sleep(2500);
+        if (MC_PASSWORD) mc.chat(`/login ${MC_PASSWORD}`);
+        await sleep(2500);
 
-      mcBot.chat(`/play ${code}`);
-      await sleep(4000);
+        mc.chat(`/play ${code}`);
+        await sleep(4000);
 
-      mcBot.chat("/joinme");
+        mc.chat("/joinme");
 
-      await sleep(3000);
-      mcBot.quit();
+        await sleep(3000);
+        mc.quit();
+      } catch (e) {
+        log("MC spawn error: " + e.message);
+      }
 
       running = false;
     });
 
-    mcBot.on("error", (e) => log("MC error: " + e.message));
-    mcBot.on("end", () => {
+    mc.on("error", (e) => log("MC error: " + e.message));
+    mc.on("end", () => {
       log("MC disconnected");
       running = false;
     });
@@ -75,39 +77,54 @@ async function startMC(code) {
 }
 
 /* ===================== TELEGRAM ===================== */
-bot.start((ctx) => ctx.reply("Webhook bot ready. Use /go <code>"));
+bot.start((ctx) => ctx.reply("Bot ready. Use /go <code>"));
 
 bot.command("go", async (ctx) => {
-  const code = ctx.message.text.split(" ")[1];
-  if (!code) return ctx.reply("Use: /go <code>");
+  const parts = ctx.message.text.split(" ");
+  const code = parts[1];
+
+  if (!code) return ctx.reply("Usage: /go <code>");
 
   ctx.reply(`Starting: ${code}`);
   startMC(code);
 });
 
-/* ===================== WEBHOOK ROUTE ===================== */
-app.post(`/bot${BOT_TOKEN}`, (req, res) => {
-  bot.handleUpdate(req.body);
-  res.sendStatus(200);
+/* ===================== WEBHOOK ===================== */
+const path = `/bot${BOT_TOKEN}`;
+
+bot.telegram.deleteWebhook().catch(() => {});
+
+bot.telegram.setWebhook(`${WEBHOOK_DOMAIN}${path}`).then(() => {
+  log("Webhook set: " + `${WEBHOOK_DOMAIN}${path}`);
+}).catch((e) => {
+  log("Webhook error: " + e.message);
 });
 
-/* ===================== HEALTH ===================== */
-app.get("/", (req, res) => {
-  res.send("Bot is running");
+/* ===================== SERVER (NO EXPRESS) ===================== */
+const http = require("http");
+
+const server = http.createServer((req, res) => {
+  if (req.method === "POST" && req.url === path) {
+    let body = "";
+
+    req.on("data", chunk => (body += chunk));
+    req.on("end", () => {
+      try {
+        bot.handleUpdate(JSON.parse(body));
+      } catch (e) {
+        log("Update error: " + e.message);
+      }
+    });
+
+    res.writeHead(200);
+    res.end("OK");
+  } else {
+    res.writeHead(200);
+    res.end("Bot running");
+  }
 });
 
-/* ===================== START WEBHOOK ===================== */
-async function start() {
-  await bot.telegram.deleteWebhook();
-
-  await bot.telegram.setWebhook(
-    `${WEBHOOK_DOMAIN}/bot${BOT_TOKEN}`
-  );
-
-  app.listen(PORT, () => {
-    log("Server started on " + PORT);
-    log("Webhook set to " + WEBHOOK_DOMAIN);
-  });
-}
-
-start();
+server.listen(PORT, () => {
+  log("Server running on port " + PORT);
+  log("Webhook path: " + path);
+});
