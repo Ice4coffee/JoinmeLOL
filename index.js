@@ -1,21 +1,40 @@
 const { Telegraf } = require("telegraf");
 const mineflayer = require("mineflayer");
+const http = require("http");
 
+/* ================= ENV ================= */
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN;
 const MC_PASSWORD = process.env.MC_PASSWORD;
+const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN;
 const PORT = process.env.PORT || 3000;
 
 if (!BOT_TOKEN) throw new Error("BOT_TOKEN is required");
-if (!WEBHOOK_DOMAIN) throw new Error("WEBHOOK_DOMAIN is required");
 
-const bot = new Telegraf(BOT_TOKEN);
-
+/* ================= LOG ================= */
 function log(msg) {
   console.log(`[LOG ${new Date().toISOString()}] ${msg}`);
 }
 
-/* ===================== MC ===================== */
+/* ================= WEBHOOK FIX ================= */
+function normalizeDomain(domain) {
+  if (!domain) return null;
+
+  let d = String(domain).trim();
+  d = d.replace(/\/+$/, "");
+
+  if (!d.startsWith("http://") && !d.startsWith("https://")) {
+    d = "https://" + d;
+  }
+
+  return d;
+}
+
+/* ================= TELEGRAM ================= */
+const bot = new Telegraf(BOT_TOKEN);
+
+const webhookPath = `/bot${BOT_TOKEN}`;
+
+/* ================= MC ================= */
 let mc = null;
 let running = false;
 
@@ -57,8 +76,9 @@ async function startMC(code) {
 
         await sleep(3000);
         mc.quit();
+
       } catch (e) {
-        log("MC spawn error: " + e.message);
+        log("MC error: " + e.message);
       }
 
       running = false;
@@ -76,38 +96,46 @@ async function startMC(code) {
   }
 }
 
-/* ===================== TELEGRAM ===================== */
+/* ================= TG COMMAND ================= */
 bot.start((ctx) => ctx.reply("Bot ready. Use /go <code>"));
 
 bot.command("go", async (ctx) => {
-  const parts = ctx.message.text.split(" ");
-  const code = parts[1];
-
+  const code = ctx.message.text.split(" ")[1];
   if (!code) return ctx.reply("Usage: /go <code>");
 
   ctx.reply(`Starting: ${code}`);
   startMC(code);
 });
 
-/* ===================== WEBHOOK ===================== */
-const path = `/bot${BOT_TOKEN}`;
+/* ================= WEBHOOK SETUP ================= */
+async function setupWebhook() {
+  try {
+    const base = normalizeDomain(WEBHOOK_DOMAIN);
 
-bot.telegram.deleteWebhook().catch(() => {});
+    if (!base) {
+      throw new Error("WEBHOOK_DOMAIN is missing");
+    }
 
-bot.telegram.setWebhook(`${WEBHOOK_DOMAIN}${path}`).then(() => {
-  log("Webhook set: " + `${WEBHOOK_DOMAIN}${path}`);
-}).catch((e) => {
-  log("Webhook error: " + e.message);
-});
+    const url = `${base}${webhookPath}`;
 
-/* ===================== SERVER (NO EXPRESS) ===================== */
-const http = require("http");
+    await bot.telegram.deleteWebhook();
 
+    await bot.telegram.setWebhook(url);
+
+    log("Webhook set → " + url);
+
+  } catch (e) {
+    log("Webhook error: " + e.message);
+  }
+}
+
+/* ================= HTTP SERVER ================= */
 const server = http.createServer((req, res) => {
-  if (req.method === "POST" && req.url === path) {
+  if (req.method === "POST" && req.url === webhookPath) {
     let body = "";
 
     req.on("data", chunk => (body += chunk));
+
     req.on("end", () => {
       try {
         bot.handleUpdate(JSON.parse(body));
@@ -124,7 +152,9 @@ const server = http.createServer((req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  log("Server running on port " + PORT);
-  log("Webhook path: " + path);
+/* ================= START ================= */
+server.listen(PORT, async () => {
+  log("Server started on port " + PORT);
+
+  await setupWebhook();
 });
