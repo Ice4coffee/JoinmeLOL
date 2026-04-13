@@ -20,13 +20,10 @@ function log(msg) {
 
 bot.command("go", (ctx) => {
   const args = ctx.message.text.split(" ");
-  const gameCode = args[1];
+  const gameCode = args[1]; // Берем код игры
 
-  if (!gameCode) {
-    return ctx.reply("❌ Введи код, например: /go bw-d10");
-  }
+  if (!gameCode) return ctx.reply("❌ Введи код, например: /go bw-d10");
 
-  // Если бот уже запущен, выходим из него перед новым запуском
   if (activeMcBot) {
     try { activeMcBot.quit(); } catch(e) {}
     activeMcBot = null;
@@ -42,38 +39,45 @@ bot.command("go", (ctx) => {
   });
 
   activeMcBot.once("login", () => {
-    log("✅ Зашел на сервер. Жду 3 сек для логина...");
-
+    log("✅ Зашел. Цепочка таймеров запущена...");
     setTimeout(() => {
       activeMcBot.chat(`/l ${MC_PASSWORD}`);
-      log("🔑 Пароль отправлен.");
-
       setTimeout(() => {
-        log(`📨 Переход в ${gameCode}...`);
         activeMcBot.chat(`/play ${gameCode}`);
-
         setTimeout(() => {
-          log("📢 Отправка /joinme...");
           activeMcBot.chat("/joinme");
-          ctx.reply(`✅ JoinMe отправлен! Бот остается на сервере.\nНапиши «liv», чтобы он вышел.`);
+          ctx.reply(`✅ JoinMe отправлен! Бот ливнёт, если увидит «liv» в чате.`);
         }, 6000); 
-
       }, 4000); 
     }, 3000); 
+  });
+
+  // ПОИСК БУКВ "liv" В ЧАТЕ
+  activeMcBot.on("message", (jsonMsg) => {
+    const message = jsonMsg.toString().toLowerCase();
+    
+    // Если в сообщении есть "liv" (вместе, в любом месте строки)
+    if (message.includes("liv")) {
+      log(`🎯 Обнаружено "liv" в сообщении: ${message}`);
+      
+      if (activeMcBot) {
+        activeMcBot.quit();
+        activeMcBot = null;
+        bot.telegram.sendMessage(CHAT_ID, `🔌 Бот ливнул! Найдено "liv" в чате:\n"${message}"`);
+      }
+    }
   });
 
   activeMcBot.on("error", (err) => log(`⚠️ Ошибка: ${err.message}`));
   activeMcBot.on("end", () => { activeMcBot = null; });
 });
 
-// ОБРАБОТКА ВЫХОДА ПО КОМАНДЕ "liv"
+// Выход через Telegram
 bot.on("text", (ctx) => {
-  const msg = ctx.message.text.toLowerCase();
-  if ((msg === "liv" || msg === "лив") && activeMcBot) {
+  if (ctx.message.text.toLowerCase() === "liv" && activeMcBot) {
     activeMcBot.quit();
     activeMcBot = null;
-    ctx.reply("🔌 Бот успешно вышел с сервера.");
-    log("Команда 'liv' выполнена.");
+    ctx.reply("🔌 Бот вышел.");
   }
 });
 
