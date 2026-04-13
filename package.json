@@ -1,14 +1,101 @@
-{
-  "name": "agerapvp-bot",
-  "version": "1.0.0",
-  "description": "MC JoinMe Bot",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "express": "^4.18.2",
-    "mineflayer": "^4.15.0",
-    "telegraf": "^4.12.2"
-  }
+const express = require("express");
+const { Telegraf } = require("telegraf");
+const mineflayer = require("mineflayer");
+
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const MC_PASSWORD = process.env.MC_PASSWORD;
+const CHAT_ID = "8322294514"; // Твой ID для проверки прав
+const PORT = process.env.PORT || 3000;
+const HOST = "production.agerapvp.club";
+
+const bot = new Telegraf(BOT_TOKEN);
+const app = express();
+app.use(express.json());
+
+let activeMcBot = null; // Храним активную сессию здесь
+
+function log(msg) {
+  console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 }
+
+// Команда запуска процесса
+bot.command("go", async (ctx) => {
+  const args = ctx.message.text.split(" ");
+  const gameCode = args[1];
+
+  if (!gameCode) {
+    return ctx.reply("❌ Ошибка! Введи код игры, например: /go bw-d10");
+  }
+
+  // Если уже есть активный бот, выходим из него перед новым запуском
+  if (activeMcBot) {
+    try { activeMcBot.quit(); } catch(e) {}
+    log("Замена старой сессии на новую...");
+  }
+
+  ctx.reply(`🚀 Запуск Parabala_ в режим ${gameCode}...`);
+  
+  activeMcBot = mineflayer.createBot({
+    host: HOST,
+    username: "Parabala_",
+    version: "1.8.9",
+    plugins: { blocks: false, physics: false, inventory: false }
+  });
+
+  // 1. ЛОГИН
+  activeMcBot.once("login", () => {
+    log("✅ Подключение установлено. Ждем 2 сек для ввода пароля...");
+    setTimeout(() => {
+      activeMcBot.chat(`/l ${MC_PASSWORD}`);
+      log("🔑 Пароль отправлен.");
+    }, 2000);
+  });
+
+  // 2. ЦЕПОЧКА КОМАНД
+  activeMcBot.once("spawn", () => {
+    // Через 3 сек после спавна — вход в режим
+    setTimeout(() => {
+      log(`📨 Команда: /play ${gameCode}`);
+      activeMcBot.chat(`/play ${gameCode}`);
+
+      // Через 5 сек после входа в режим — JoinMe
+      setTimeout(() => {
+        log("📢 Команда: /joinme");
+        activeMcBot.chat("/joinme");
+        ctx.reply(`✅ JoinMe отправлен! Бот остался на сервере. Напиши «лив», чтобы отключить его.`);
+      }, 5000);
+
+    }, 3000);
+  });
+
+  activeMcBot.on("error", (err) => {
+    log(`⚠️ Ошибка: ${err.message}`);
+    activeMcBot = null;
+  });
+
+  activeMcBot.on("end", () => {
+    log("🔌 Бот отключился от Minecraft.");
+    activeMcBot = null;
+  });
+});
+
+// ОБРАБОТКА КОМАНДЫ "ЛИВ"
+bot.on("text", (ctx) => {
+  const text = ctx.message.text.toLowerCase();
+  
+  if (text === "лив") {
+    if (activeMcBot) {
+      activeMcBot.quit();
+      activeMcBot = null;
+      ctx.reply("🔌 Бот успешно вышел с сервера.");
+      log("Команда 'лив' выполнена.");
+    } else {
+      ctx.reply("❌ Нет активных сессий для отключения.");
+    }
+  }
+});
+
+app.get("/", (req, res) => res.send("Bot is Running"));
+app.listen(PORT, () => log(`Сервер запущен на порту ${PORT}`));
+
+bot.launch();
