@@ -1,75 +1,23 @@
-const express = require("express");
-const { Telegraf } = require("telegraf");
-const mineflayer = require("mineflayer");
-
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const MC_PASSWORD = process.env.MC_PASSWORD;
-const CHAT_ID = "8322294514"; 
-const PORT = process.env.PORT || 3000;
-const HOST = "production.agerapvp.club";
-
-const bot = new Telegraf(BOT_TOKEN);
-const app = express();
-app.use(express.json());
-
-let activeMcBot = null; 
-
-function log(msg) {
-  console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
-}
-
-bot.command("go", async (ctx) => {
-  const args = ctx.message.text.split(" ");
-  const gameCode = args[1];
-
-  if (!gameCode) {
-    return ctx.reply("❌ Ошибка! Введи код игры, например: /go bw-d10");
-  }
-
-  if (activeMcBot) {
-    try { activeMcBot.quit(); } catch(e) {}
-  }
-
-  ctx.reply(`🚀 Запуск Parabala_ → ${gameCode}...`);
-  
-  activeMcBot = mineflayer.createBot({
-    host: HOST,
-    username: "Parabala_",
-    version: "1.8.9",
-    plugins: { blocks: false, physics: false, inventory: false }
-  });
-
   activeMcBot.once("login", () => {
-    log("✅ Логин...");
+    log("✅ Коннект. Ждем 2 сек для ввода пароля...");
+    
     setTimeout(() => {
       activeMcBot.chat(`/l ${MC_PASSWORD}`);
+      log("🔑 Пароль отправлен. Ждем 4 сек для перехода в лобби...");
+
+      // СЛЕДУЮЩИЙ ШАГ: Переход в режим через 4 секунды после пароля
+      setTimeout(() => {
+        log(`📨 Команда: /play ${gameCode}`);
+        activeMcBot.chat(`/play ${gameCode}`);
+
+        // СЛЕДУЮЩИЙ ШАГ: JoinMe через 6 секунд после захода в режим
+        setTimeout(() => {
+          log("📢 Команда: /joinme");
+          activeMcBot.chat("/joinme");
+          ctx.reply(`✅ JoinMe отправлен в ${gameCode}! Пиши «лив» для выхода.`);
+        }, 60000); // 6 секунд на загрузку мира игры
+
+      }, 4000); // 4 секунды на прогрузку лобби после логина
+
     }, 2000);
   });
-
-  activeMcBot.once("spawn", () => {
-    setTimeout(() => {
-      log(`📨 Режим: ${gameCode}`);
-      activeMcBot.chat(`/play ${gameCode}`);
-
-      setTimeout(() => {
-        log("📢 JoinMe");
-        activeMcBot.chat("/joinme");
-        ctx.reply(`✅ Отправлено! Напиши «лив» для выхода.`);
-      }, 5000);
-    }, 3000);
-  });
-
-  activeMcBot.on("error", (err) => log(`⚠️ Ошибка: ${err.message}`));
-  activeMcBot.on("end", () => { activeMcBot = null; });
-});
-
-bot.on("text", (ctx) => {
-  if (ctx.message.text.toLowerCase() === "лив" && activeMcBot) {
-    activeMcBot.quit();
-    ctx.reply("🔌 Вышел.");
-  }
-});
-
-app.get("/", (req, res) => res.send("OK"));
-app.listen(PORT, () => log(`Сервер на порту ${PORT}`));
-bot.launch();
