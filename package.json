@@ -84,7 +84,7 @@ bot.on("text", (ctx) => {
   const text = ctx.message.text.toLowerCase();
   
   if (text === "лив") {
-    if (activeMcBot) {
+    if (activeMcBot) {вава
       activeMcBot.quit();
       activeMcBot = null;
       ctx.reply("🔌 Бот успешно вышел с сервера.");
