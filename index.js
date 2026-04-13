@@ -20,7 +20,7 @@ function log(msg) {
 
 bot.command("go", (ctx) => {
   const args = ctx.message.text.split(" ");
-  const gameCode = args[1]; // Берем код игры
+  const gameCode = args[1];
 
   if (!gameCode) return ctx.reply("❌ Введи код, например: /go bw-d10");
 
@@ -29,7 +29,7 @@ bot.command("go", (ctx) => {
     activeMcBot = null;
   }
 
-  ctx.reply(`🚀 Parabala_ заходит в ${gameCode}...`);
+  ctx.reply(`🚀 Fast Start: Parabala_ → ${gameCode}`);
   
   activeMcBot = mineflayer.createBot({
     host: HOST,
@@ -39,31 +39,38 @@ bot.command("go", (ctx) => {
   });
 
   activeMcBot.once("login", () => {
-    log("✅ Зашел. Цепочка таймеров запущена...");
+    log("✅ Зашел. Быстрая цепочка...");
+    
+    // 1. Быстрый логин
     setTimeout(() => {
       activeMcBot.chat(`/l ${MC_PASSWORD}`);
+      log("🔑 Логин отправлен");
+
+      // 2. Быстрый переход
       setTimeout(() => {
+        log(`📨 Команда: /play ${gameCode}`);
         activeMcBot.chat(`/play ${gameCode}`);
+
+        // 3. Быстрый JoinMe
         setTimeout(() => {
+          log("📢 Команда: /joinme");
           activeMcBot.chat("/joinme");
-          ctx.reply(`✅ JoinMe отправлен! Бот ливнёт, если увидит «liv» в чате.`);
-        }, 6000); 
-      }, 4000); 
-    }, 3000); 
+          ctx.reply(`✅ JoinMe отправлен в ${gameCode}!`);
+        }, 2500); // 2.5 сек на прогрузку игры
+
+      }, 1500); // 1.5 сек после пароля
+
+    }, 1500); // 1.5 сек после коннекта
   });
 
-  // ПОИСК БУКВ "liv" В ЧАТЕ
   activeMcBot.on("message", (jsonMsg) => {
     const message = jsonMsg.toString().toLowerCase();
-    
-    // Если в сообщении есть "liv" (вместе, в любом месте строки)
     if (message.includes("liv")) {
-      log(`🎯 Обнаружено "liv" в сообщении: ${message}`);
-      
+      log(`🎯 Детект "liv": ${message}`);
       if (activeMcBot) {
         activeMcBot.quit();
         activeMcBot = null;
-        bot.telegram.sendMessage(CHAT_ID, `🔌 Бот ливнул! Найдено "liv" в чате:\n"${message}"`);
+        bot.telegram.sendMessage(CHAT_ID, `🔌 Бот ливнул (детект liv в чате).`);
       }
     }
   });
@@ -72,7 +79,6 @@ bot.command("go", (ctx) => {
   activeMcBot.on("end", () => { activeMcBot = null; });
 });
 
-// Выход через Telegram
 bot.on("text", (ctx) => {
   if (ctx.message.text.toLowerCase() === "liv" && activeMcBot) {
     activeMcBot.quit();
