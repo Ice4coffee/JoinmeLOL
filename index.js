@@ -24,85 +24,83 @@ bot.command("go", (ctx) => {
 
   if (!gameCode) return ctx.reply("❌ Введи код, например: /go bw-d10");
 
-  // Принудительная очистка старого процесса
   if (activeMcBot) {
-    log("Очистка старой сессии...");
     try { activeMcBot.quit(); } catch(e) {}
     activeMcBot = null;
   }
 
-  ctx.reply(`🚀 Коннект Parabala_ → ${gameCode}...`);
+  ctx.reply(`🚀 Запуск Parabala_ → ${gameCode}`);
   
   activeMcBot = mineflayer.createBot({
     host: HOST,
-    port: 25565,
     username: "Parabala_",
     version: "1.8.9",
-    // Минимальный набор плагинов для стабильности
-    hideErrors: false 
+    // СТРОГО ОТКЛЮЧАЕМ ПЛАГИНЫ, чтобы бот не вылетал сам по себе
+    plugins: {
+      blocks: false,
+      physics: false,
+      inventory: false,
+      entities: false
+    }
   });
 
-  // Логгирование процесса подключения
-  activeMcBot.on("connect", () => log("🔗 Установлено соединение с сокетом..."));
-  
   activeMcBot.once("login", () => {
-    log("✅ Зашел на сервер. Запуск таймеров...");
+    log("✅ Зашел. Выполняю команды...");
     
     setTimeout(() => {
       if (activeMcBot) activeMcBot.chat(`/l ${MC_PASSWORD}`);
-      log("🔑 Логин отправлен");
-
+      
       setTimeout(() => {
         if (activeMcBot) activeMcBot.chat(`/play ${gameCode}`);
-        log(`📨 Команда /play ${gameCode}`);
 
         setTimeout(() => {
-          if (activeMcBot) activeMcBot.chat("/joinme");
-          log("📢 Команда /joinme");
-          ctx.reply(`✅ Все команды отправлены в ${gameCode}!`);
-        }, 2000); 
-
-      }, 1500); 
-    }, 1500); 
+          if (activeMcBot) {
+            activeMcBot.chat("/joinme");
+            log("📢 JoinMe отправлен. Бот остается в сети.");
+            ctx.reply(`✅ Все готово! Бот в игре. Жду «liv» для выхода.`);
+          }
+        }, 3000); // 3 сек на переход
+      }, 2000); // 2 сек после логина
+    }, 2000); // 2 сек после входа
   });
 
-  // Если не заходит, это событие скажет почему
-  activeMcBot.on("error", (err) => {
-    log(`⚠️ КРИТИЧЕСКАЯ ОШИБКА: ${err.message}`);
-    ctx.reply(`⚠️ Ошибка подключения: ${err.message}`);
-  });
-
-  activeMcBot.on("kicked", (reason) => {
-    const r = JSON.parse(reason).text || reason;
-    log(`❌ КИКНУТ: ${r}`);
-    ctx.reply(`❌ Кик: ${r}`);
-  });
-
+  // ОБРАБОТКА ЧАТА (ВЫХОД ПО СЛОВУ LIV)
   activeMcBot.on("message", (jsonMsg) => {
-    const message = jsonMsg.toString().toLowerCase();
-    if (message.includes("liv")) {
+    const message = jsonMsg.toString();
+    const lowMsg = message.toLowerCase();
+    
+    // Выходим только если "liv" написали ДРУГИЕ (не сам бот в пароле)
+    if (lowMsg.includes("liv")) {
+      // Проверка: если сообщение содержит наш пароль, игнорируем (защита от самокика)
+      if (MC_PASSWORD && lowMsg.includes(MC_PASSWORD.toLowerCase())) return;
+
+      log(`🎯 Детект "liv" в чате: ${message}`);
       if (activeMcBot) {
         activeMcBot.quit();
         activeMcBot = null;
-        bot.telegram.sendMessage(CHAT_ID, `🔌 Ливнул (детект liv в чате).`);
+        bot.telegram.sendMessage(CHAT_ID, `🔌 Бот ливнул по команде из чата:\n"${message}"`);
       }
     }
   });
 
+  activeMcBot.on("error", (err) => log(`⚠️ Ошибка: ${err.message}`));
+  activeMcBot.on("kicked", (reason) => log(`❌ Кик: ${reason}`));
   activeMcBot.on("end", () => {
-    log("🔌 Соединение закрыто");
+    log("🔌 Соединение закрыто (end)");
     activeMcBot = null;
   });
 });
 
+// Выход через Telegram
 bot.on("text", (ctx) => {
-  if (ctx.message.text.toLowerCase() === "liv" && activeMcBot) {
+  const text = ctx.message.text.toLowerCase();
+  if ((text === "liv" || text === "лив") && activeMcBot) {
     activeMcBot.quit();
     activeMcBot = null;
     ctx.reply("🔌 Вышел.");
   }
 });
 
-app.get("/", (req, res) => res.send("Bot Status: OK"));
+app.get("/", (req, res) => res.send("OK"));
 app.listen(PORT, () => log(`Сервер на порту ${PORT}`));
 bot.launch();
